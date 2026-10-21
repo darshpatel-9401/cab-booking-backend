@@ -8,6 +8,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 from stripe_client import CURRENCY
+from ratelimit import rate_limit
 
 from auth import get_current_user
 from database import get_session
@@ -46,7 +47,7 @@ def get_registered_driver(user_id: uuid.UUID, db: Session) -> Driver:
     return driver
 
 
-@router.post("/register", status_code=201)
+@router.post("/register", status_code=201, dependencies=[Depends(rate_limit("driver-register", 5, 60))])
 def register_driver(
     body: DriverRegister,
     user: dict = Depends(get_current_user),
@@ -87,7 +88,7 @@ def register_driver(
     }
 
 
-@router.put("/location")
+@router.put("/location", dependencies=[Depends(rate_limit("driver-location", 60, 60))])
 def update_location(
     body: LocationUpdate,
     user: dict = Depends(get_current_user),
@@ -142,7 +143,7 @@ def update_status(
     return {"status": body.status}
 
 
-@router.get("/nearby")
+@router.get("/nearby", dependencies=[Depends(rate_limit("nearby", 60, 60))])
 def nearby_drivers(
     lat: float = Query(..., ge=-90, le=90),
     lng: float = Query(..., ge=-180, le=180),

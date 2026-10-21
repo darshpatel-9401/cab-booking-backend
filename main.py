@@ -1,43 +1,82 @@
+import time
 import uuid
-
-from routers.rides import router as rides_router
-from routers.drivers import router as drivers_router
-from routers.ws import router as ws_router
-from routers.payments import router as payments_router
-from routers.reviews import router as reviews_router
-from routers.webhooks import router as webhooks_router
-from routers.promos import router as promos_router
-from routers.wallet import router as wallet_router
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session
+from starlette.datastructures import MutableHeaders
 
 from auth import get_current_user
+from config import ALLOWED_ORIGINS, ENABLE_DOCS
 from database import engine, get_session
-from redis_client import redis_client
-from stripe_client import CURRENCY, stripe
 from models import User
+from ratelimit import rate_limit
+from redis_client import redis_sync
+from routers.drivers import router as drivers_router
+from routers.payments import router as payments_router
+from routers.promos import router as promos_router
+from routers.reviews import router as reviews_router
+from routers.rides import router as rides_router
+from routers.wallet import router as wallet_router
+from routers.webhooks import router as webhooks_router
+from routers.ws import router as ws_router
 
-app = FastAPI(title="Cab Booking API")
 
+class SecurityHeadersMiddleware:
+    """Adds safe default headers to every HTTP response."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        path = scope.get("path", "")
+
+        async def send_with_headers(message):
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                headers["X-Content-Type-Options"] = "nosniff"
+                headers["Referrer-Policy"] = "no-referrer"
+                headers["X-Frame-Options"] = "DENY"
+                if path.startswith("/api/"):
+                    headers["Cache-Control"] = "no-store"
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
+
+
+app = FastAPI(
+    title="Cab Booking API",
+    docs_url="/docs" if ENABLE_DOCS else None,
+    redoc_url=None,
+    openapi_url="/openapi.json" if ENABLE_DOCS else None,
+)
+
+app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=ALLOWED_ORIGINS,
+    allow_methods=["GET", "POST", "PUT", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 app.include_router(rides_router)
 app.include_router(drivers_router)
 app.include_router(ws_router)
 app.include_router(payments_router)
-app.include_router(reviews_router)
 app.include_router(webhooks_router)
+app.include_router(reviews_router)
 app.include_router(promos_router)
 app.include_router(wallet_router)
+
+_ready_cache = {"at": 0.0, "code": 200, "body": {}}
+
 
 @app.get("/")
 def root():
@@ -49,56 +88,44 @@ def health_check():
     return {"status": "ok"}
 
 
-@app.get("/health/db")
-def health_db():
+@app.get("/ready")
+def ready():
+    # Cached for 10 seconds, so this open route can't be used to hammer the database
+    now = time.monotonic()
+    if _ready_cache["body"] and now - _ready_cache["at"] < 10:
+        return JSONResponse(
+            status_code=_ready_cache["code"], content=_ready_cache["body"]
+        )
+
+    status = {"database": "ok", "redis": "ok"}
+
     try:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
-        return {"database": "connected"}
     except Exception as e:
-        print("Database error:", e)
-        raise HTTPException(status_code=500, detail="Database connection failed")
+        print("Readiness check: database failed:", e)
+        status["database"] = "failed"
 
-
-@app.get("/health/postgis")
-def health_postgis():
     try:
-        with engine.connect() as conn:
-            version = conn.execute(text("SELECT postgis_version()")).scalar()
-        return {"postgis": version}
+        redis_sync.ping()
     except Exception as e:
-        print("PostGIS error:", e)
-        raise HTTPException(status_code=500, detail="PostGIS not available")
+        print("Readiness check: redis failed:", e)
+        status["redis"] = "failed"
 
-@app.get("/health/redis")
-async def health_redis():
-    try:
-        await redis_client.set("health:check", "ok", ex=30)
-        value = await redis_client.get("health:check")
-        return {"redis": "connected", "roundtrip": value}
-    except Exception as e:
-        print("Redis error:", e)
-        raise HTTPException(status_code=500, detail="Redis connection failed")
+    code = 200 if all(value == "ok" for value in status.values()) else 503
+    _ready_cache.update(at=now, code=code, body=status)
+    return JSONResponse(status_code=code, content=status)
 
-@app.get("/health/stripe")
-def health_stripe():
-    try:
-        balance = stripe.Balance.retrieve()
-        return {
-            "stripe": "connected",
-            "livemode": balance.livemode,
-            "currency": CURRENCY,
-        }
-    except Exception as e:
-        print("Stripe error:", e)
-        raise HTTPException(status_code=500, detail="Stripe connection failed")
 
 @app.get("/api/me")
 def read_me(user: dict = Depends(get_current_user)):
     return {"user": user}
 
 
-@app.post("/api/auth/session")
+@app.post(
+    "/api/auth/session",
+    dependencies=[Depends(rate_limit("auth-session", 30, 60))],
+)
 def create_session(
     user: dict = Depends(get_current_user),
     db: Session = Depends(get_session),

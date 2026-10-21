@@ -11,6 +11,7 @@ from models import User, Wallet, WalletTransaction
 from redis_client import redis_sync
 from stripe_client import CURRENCY, stripe
 from wallet import MAX_TOPUP, MIN_TOPUP, min_topup_for
+from ratelimit import rate_limit
 
 router = APIRouter(prefix="/api/wallet", tags=["wallet"])
 
@@ -81,7 +82,7 @@ def wallet_transactions(
     }
 
 
-@router.post("/topup", status_code=201)
+@router.post("/topup", status_code=201, dependencies=[Depends(rate_limit("wallet-topup", 10, 60))])
 def create_topup(
     body: TopupRequest,
     user: dict = Depends(get_current_user),

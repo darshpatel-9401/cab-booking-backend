@@ -50,3 +50,25 @@ def test_estimate_returns_502_when_routing_fails(authed_client, monkeypatch):
     assert response.status_code == 502
     assert response.json() == {"detail": "Could not calculate a route right now"}
     assert "secret internal detail" not in response.text
+
+def test_estimate_rejects_trips_longer_than_200_km(authed_client, monkeypatch):
+    monkeypatch.setattr(
+        rides_module,
+        "get_route",
+        lambda *args: {"distance_meters": 250000, "duration_secs": 9000},
+    )
+
+    response = authed_client.get(URL)
+
+    assert response.status_code == 422
+    assert "200 km" in response.json()["detail"]
+
+
+def test_estimate_accepts_a_trip_of_exactly_200_km(authed_client, monkeypatch):
+    monkeypatch.setattr(
+        rides_module,
+        "get_route",
+        lambda *args: {"distance_meters": 200000, "duration_secs": 8000},
+    )
+
+    assert authed_client.get(URL).status_code == 200

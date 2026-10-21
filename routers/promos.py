@@ -8,6 +8,7 @@ from auth import get_current_user
 from database import get_session
 from promos import PromoError, evaluate_promo
 from stripe_client import CURRENCY
+from ratelimit import rate_limit
 
 router = APIRouter(prefix="/api/promos", tags=["promos"])
 
@@ -17,7 +18,7 @@ class PromoPreview(BaseModel):
     code: str = Field(min_length=1, max_length=64)
 
 
-@router.post("/preview")
+@router.post("/preview", dependencies=[Depends(rate_limit("promo-preview", 20, 60))])
 def preview_promo(
     body: PromoPreview,
     user: dict = Depends(get_current_user),

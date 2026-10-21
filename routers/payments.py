@@ -5,6 +5,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
+from ratelimit import rate_limit
 
 from auth import get_current_user
 from database import get_session
@@ -77,7 +78,7 @@ def resolve_discount(
     return discount, redemption
 
 
-@router.post("/rides/{ride_id}/intent")
+@router.post("/rides/{ride_id}/intent", dependencies=[Depends(rate_limit("pay-intent", 20, 60))])
 def create_payment_intent(
     ride_id: uuid.UUID,
     body: Optional[IntentRequest] = None,
@@ -189,7 +190,7 @@ def create_payment_intent(
     }
 
 
-@router.post("/rides/{ride_id}/pay-with-wallet")
+@router.post("/rides/{ride_id}/pay-with-wallet", dependencies=[Depends(rate_limit("pay-wallet", 10, 60))])
 def pay_with_wallet(
     ride_id: uuid.UUID,
     background_tasks: BackgroundTasks,

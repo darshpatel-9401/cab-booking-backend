@@ -10,6 +10,7 @@ from database import engine
 from events import channel_for
 from models import Driver
 from redis_client import redis_client
+from config import ALLOWED_ORIGINS
 
 router = APIRouter(tags=["websocket"])
 
@@ -104,6 +105,12 @@ async def forward_events(websocket: WebSocket, user_id: uuid.UUID, hello: dict):
 async def serve_user_socket(
     websocket: WebSocket, path_user_id: uuid.UUID, channel_name: str
 ):
+
+    origin = websocket.headers.get("origin")
+    if origin is not None and origin not in ALLOWED_ORIGINS:
+        await websocket.close(code=1008)
+        return
+    
     await websocket.accept()
 
     user = await authenticate_websocket(websocket)

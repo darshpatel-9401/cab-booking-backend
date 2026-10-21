@@ -1,4 +1,5 @@
 import os
+import token
 
 import jwt
 from jwt import PyJWKClient
@@ -31,6 +32,7 @@ def verify_token(token: str) -> dict:
             algorithms=["ES256", "RS256"],
             audience="authenticated",
             issuer=ISSUER,
+            leeway=10,  # tolerate small clock skew
         )
     except jwt.PyJWTError as e:
         print("JWT verification failed:", repr(e))

@@ -20,6 +20,8 @@ EXCLUDED_TABLES = {"spatial_ref_sys"}
 def include_object(object, name, type_, reflected, compare_to):
     if type_ == "table" and name in EXCLUDED_TABLES:
         return False
+    if type_ == "index" and name and name.startswith("ix_perf_"):
+        return False
     return True
 
 

@@ -21,7 +21,15 @@ DATABASE_URL = URL.create(
     query={"sslmode": "require"},
 )
 
-engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+# Supabase's session pooler allows only a limited number of connections, so the
+# pool is kept small and can be tuned per environment.
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True,
+    pool_size=int(os.getenv("DB_POOL_SIZE", "5")),
+    max_overflow=int(os.getenv("DB_MAX_OVERFLOW", "5")),
+    pool_recycle=1800,
+)
 
 
 def get_session():

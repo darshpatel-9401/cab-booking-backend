@@ -21,6 +21,7 @@ from emailer import send_receipt_for_ride
 from redis_client import redis_sync
 from events import publish_event_sync
 from stripe_client import CURRENCY
+from ratelimit import rate_limit
 from models import (
     RIDE_ACCEPTED,
     RIDE_CANCELLED,
@@ -38,9 +39,10 @@ router = APIRouter(prefix="/api/rides", tags=["rides"])
 
 ACTIVE_STATUSES = [RIDE_REQUESTED, RIDE_ACCEPTED, RIDE_IN_PROGRESS]
 CANCELLABLE_STATUSES = [RIDE_REQUESTED, RIDE_ACCEPTED]
+MAX_TRIP_DISTANCE_METERS = 200_000
 
 
-@router.get("/estimate")
+@router.get("/estimate", dependencies=[Depends(rate_limit("estimate", 30, 60))])
 def estimate_ride(
     origin_lat: float = Query(..., ge=-90, le=90),
     origin_lng: float = Query(..., ge=-180, le=180),
@@ -54,6 +56,12 @@ def estimate_ride(
         print("Routing error:", e)
         raise HTTPException(
             status_code=502, detail="Could not calculate a route right now"
+        )
+    
+    if route["distance_meters"] > MAX_TRIP_DISTANCE_METERS:
+        raise HTTPException(
+            status_code=422,
+            detail="Trips longer than 200 km are not supported",
         )
 
     fare = calculate_fare(route["distance_meters"], route["duration_secs"])
@@ -73,7 +81,7 @@ class RideRequest(BaseModel):
     drop_lng: float = Field(ge=-180, le=180)
 
 
-@router.post("/request", status_code=201)
+@router.post("/request", status_code=201, dependencies=[Depends(rate_limit("ride-request", 10, 60))])
 def request_ride(
     body: RideRequest,
     user: dict = Depends(get_current_user),
@@ -111,6 +119,12 @@ def request_ride(
         print("Routing error:", e)
         raise HTTPException(
             status_code=502, detail="Could not calculate a route right now"
+        )
+
+    if route["distance_meters"] > MAX_TRIP_DISTANCE_METERS:
+        raise HTTPException(
+            status_code=422,
+            detail="Trips longer than 200 km are not supported",
         )
 
     fare = calculate_fare(route["distance_meters"], route["duration_secs"])
@@ -172,7 +186,7 @@ def ride_status(
         "created_at": ride.created_at.isoformat(),
     }
 
-@router.post("/{ride_id}/match")
+@router.post("/{ride_id}/match", dependencies=[Depends(rate_limit("ride-match", 20, 60))])
 def match_ride(
     ride_id: uuid.UUID,
     user: dict = Depends(get_current_user),
@@ -478,7 +492,7 @@ class ReviewCreate(BaseModel):
         return cleaned or None
 
 
-@router.post("/{ride_id}/review", status_code=201)
+@router.post("/{ride_id}/review", status_code=201, dependencies=[Depends(rate_limit("review", 10, 60))])
 def review_ride(
     ride_id: uuid.UUID,
     body: ReviewCreate,
