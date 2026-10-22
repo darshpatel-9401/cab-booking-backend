@@ -141,6 +141,24 @@ async def rider_ws(websocket: WebSocket, rider_id: str):
         await websocket.close(code=1008)
         return
 
+    token = websocket.query_params.get("token")
+    try:
+        user = verify_token(token) if token else None
+    except Exception as e:
+        print("WS auth error:", repr(e))
+        user = None
+    if not user or user["id"] != rider_id:
+        print("WS rejected: auth", bool(token), user and user["id"], rider_id)
+        await websocket.close(code=1008)
+        return
+
+    await websocket.accept()
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+
 
 @router.websocket("/ws/driver/{driver_id}")
 async def driver_socket(websocket: WebSocket, driver_id: uuid.UUID):
