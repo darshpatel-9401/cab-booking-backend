@@ -10,7 +10,7 @@ from database import engine
 from events import channel_for
 from models import Driver
 from redis_client import redis_client
-from config import ALLOWED_ORIGINS
+from config import ALLOWED_ORIGINS, origin_allowed
 
 router = APIRouter(tags=["websocket"])
 
@@ -134,8 +134,12 @@ async def serve_user_socket(
 
 
 @router.websocket("/ws/rider/{rider_id}")
-async def rider_socket(websocket: WebSocket, rider_id: uuid.UUID):
-    await serve_user_socket(websocket, rider_id, "rider")
+async def rider_ws(websocket: WebSocket, rider_id: str):
+    origin = websocket.headers.get("origin")
+    if not origin_allowed(origin):
+        print("WS rejected: origin", origin)
+        await websocket.close(code=1008)
+        return
 
 
 @router.websocket("/ws/driver/{driver_id}")
