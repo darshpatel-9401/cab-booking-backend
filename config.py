@@ -1,10 +1,12 @@
 import os
+import re
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
 DEFAULT_ORIGINS = "http://localhost:3000,http://127.0.0.1:3000"
+ALLOWED_ORIGIN_REGEX = re.compile(r"^https://cab-booking-frontend.*\.vercel\.app$")
 
 
 def parse_origins(raw: str) -> list:
@@ -12,6 +14,12 @@ def parse_origins(raw: str) -> list:
     if "*" in origins:
         raise RuntimeError("ALLOWED_ORIGINS must list exact origins, not *")
     return origins
+
+def origin_allowed(origin: str | None) -> bool:
+    if not origin:
+        return False
+    origin = origin.rstrip("/")
+    return origin in ALLOWED_ORIGINS or bool(ALLOWED_ORIGIN_REGEX.match(origin))
 
 
 ALLOWED_ORIGINS = parse_origins(os.getenv("ALLOWED_ORIGINS", DEFAULT_ORIGINS))
